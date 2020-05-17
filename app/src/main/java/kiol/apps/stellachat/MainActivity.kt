@@ -1,26 +1,20 @@
 package kiol.apps.stellachat
 
-import android.graphics.BitmapFactory
-import androidx.appcompat.app.AppCompatActivity
+import android.annotation.SuppressLint
 import android.os.Bundle
-import android.os.SystemClock
 import android.util.Log
+import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import kiol.apps.stellachat.databinding.ActivityMainBinding
 import kiol.apps.stellachat.helpers.BasePeerConnectionObserver
 import kiol.apps.stellachat.helpers.BaseSdpObserver
-import kiol.apps.stellachat.helpers.getNV21
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
-import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.webrtc.*
 import java.net.InetAddress
-import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
 
@@ -29,6 +23,8 @@ class MainActivity : AppCompatActivity() {
     private var isServer = true
     private var tcpChannel: TcpChannel? = null
     private var peerConnection: PeerConnection? = null
+
+    private val eglBase = EglBase.create()
 
     private val sdpMediaConstraints = MediaConstraints().apply {
         mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "false"))
@@ -73,14 +69,21 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    @SuppressLint("UnsafeExperimentalUsageError")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        val eglContext = eglBase.eglBaseContext
         with(binding.remoteRenderer) {
-            init(EglBase.create().eglBaseContext, null)
+            init(eglContext, null)
+            setZOrderMediaOverlay(true)
+        }
+
+        with(binding.localRenderer) {
+            init(eglContext, null)
             setZOrderMediaOverlay(true)
         }
 
@@ -88,16 +91,12 @@ class MainActivity : AppCompatActivity() {
         binding.socketTypeGroup.setOnCheckedChangeListener { group, checkedId ->
             if (checkedId == R.id.serverCheckId) {
                 isServer = true
-                binding.tempLocalRenderer.setImageResource(R.drawable.ava2)
                 binding.ipPort.setText("0.0.0.0:8888")
             } else {
                 isServer = false
-                binding.tempLocalRenderer.setImageResource(R.drawable.ava)
                 binding.ipPort.setText("192.168.0.103:8888")
             }
         }
-
-        binding.tempLocalRenderer.setImageResource(R.drawable.ava2)
 
         binding.connectBtn.setOnClickListener {
             val (ip, port) = binding.ipPort.text.split(":")
@@ -127,7 +126,9 @@ class MainActivity : AppCompatActivity() {
                 }.launchIn(lifecycleScope)
             }
         }
+
     }
+
 
     private fun createPeerConnection() {
         PeerConnectionFactory.initialize(
@@ -139,8 +140,12 @@ class MainActivity : AppCompatActivity() {
             .setOptions(PeerConnectionFactory.Options().apply {
                 disableEncryption = true
             })
-            .setVideoEncoderFactory(SoftwareVideoEncoderFactory())
-            .setVideoDecoderFactory(SoftwareVideoDecoderFactory())
+            .setVideoEncoderFactory(
+                DefaultVideoEncoderFactory(
+                    eglBase.eglBaseContext, true /* enableIntelVp8Encoder */, true
+                )
+            )
+            .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
             .createPeerConnectionFactory()
 
 
@@ -160,31 +165,7 @@ class MainActivity : AppCompatActivity() {
 
         peerConnection = peerConnectionFactory.createPeerConnection(rtcConfig, peerConnectionObserver)
 
-        val videoSource = peerConnectionFactory.createVideoSource(false)
-        val captureObserver = videoSource.capturerObserver
-        captureObserver.onCapturerStarted(true)
-
-        GlobalScope.launch(Dispatchers.IO) {
-            val b = BitmapFactory.decodeResource(
-                this@MainActivity.resources, if (isServer) R.drawable.ava2 else R
-                    .drawable.ava
-            )
-            val arr = getNV21(b)
-            val buff = NV21Buffer(arr, b.width, b.height) {}
-            while (true) {
-                val vf = VideoFrame(
-                    buff, 0,
-                    TimeUnit.MILLISECONDS.toNanos(SystemClock.elapsedRealtime())
-                )
-                captureObserver.onFrameCaptured(vf)
-                delay(33)
-            }
-        }
-
-        val videoTrack = peerConnectionFactory.createVideoTrack("ARDAMSv0", videoSource)
-        videoTrack.setEnabled(true)
-
-        peerConnection?.addTrack(videoTrack, listOf("ARDAMS"))
+        peerConnection?.addTrack(createCameraVideoTrack(peerConnectionFactory), listOf("ARDAMS"))
 
         val remoteVideoTrack = peerConnection?.transceivers?.firstOrNull()?.receiver?.track() as? VideoTrack
         remoteVideoTrack?.setEnabled(true)
@@ -194,5 +175,29 @@ class MainActivity : AppCompatActivity() {
             peerConnection?.createOffer(sdbObserver, sdpMediaConstraints)
         }
         Logging.enableLogToDebugOutput(Logging.Severity.LS_VERBOSE)
+    }
+
+    private fun createCameraVideoTrack(
+        peerConnectionFactory: PeerConnectionFactory
+    ):
+            VideoTrack {
+        val camNumerator = Camera2Enumerator(this)
+        with(camNumerator) {
+            val capturer = camNumerator.createCapturer(deviceNames.firstOrNull {
+                isFrontFacing(it)
+            }, null)
+            val videoSource = peerConnectionFactory.createVideoSource(false)
+            capturer.initialize(
+                SurfaceTextureHelper.create("CapturerThread", eglBase.eglBaseContext),
+                this@MainActivity, videoSource.capturerObserver
+            )
+            capturer.startCapture(800, 800, 30)
+
+            val videoTrack = peerConnectionFactory.createVideoTrack("ARDAMSv0", videoSource)
+            videoTrack.setEnabled(true)
+            videoTrack.addSink(binding.localRenderer)
+
+            return videoTrack
+        }
     }
 }
