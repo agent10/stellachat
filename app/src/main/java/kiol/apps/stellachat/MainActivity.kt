@@ -1,6 +1,8 @@
 package kiol.apps.stellachat
 
 import android.annotation.SuppressLint
+import android.content.Context
+import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
@@ -8,10 +10,16 @@ import androidx.lifecycle.lifecycleScope
 import kiol.apps.stellachat.databinding.ActivityMainBinding
 import kiol.apps.stellachat.helpers.BasePeerConnectionObserver
 import kiol.apps.stellachat.helpers.BaseSdpObserver
+import kiol.apps.stellachat.sockets.MulticastChannel
+import kiol.apps.stellachat.sockets.TcpChannel
+import kiol.apps.stellachat.sockets.TcpResult
+import kiol.apps.stellachat.sockets.UdpChannel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.webrtc.*
 import java.net.InetAddress

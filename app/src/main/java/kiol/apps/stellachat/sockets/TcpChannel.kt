@@ -1,4 +1,4 @@
-package kiol.apps.stellachat
+package kiol.apps.stellachat.sockets
 
 import android.util.Log
 import kotlinx.coroutines.*
@@ -9,7 +9,6 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
-import kotlin.coroutines.suspendCoroutine
 
 sealed class TcpResult {
     object Idle : TcpResult()
