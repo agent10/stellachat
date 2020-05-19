@@ -26,7 +26,7 @@ class MulticastChannel(private val inetAddress: InetAddress, private val port: I
         }
         return flow {
             try {
-                val buf = ByteArray(64)
+                val buf = ByteArray(256)
                 val receivePacket = DatagramPacket(buf, buf.size)
                 while (true) {
                     if (socket == null) {
@@ -39,7 +39,7 @@ class MulticastChannel(private val inetAddress: InetAddress, private val port: I
                     }
                 }
             } catch (e: Exception) {
-                Log.d("kiol", "udp channel error = $e")
+                Log.e("kiol", "multicast channel error = $e")
             } finally {
                 close()
             }
@@ -53,8 +53,9 @@ class MulticastChannel(private val inetAddress: InetAddress, private val port: I
     }
 
     fun send(message: String) {
+        val b = message.toByteArray()
         GlobalScope.launch {
-            val b = message.toByteArray()
+
             socket?.send(DatagramPacket(b, b.size, inetAddress, port))
         }
     }

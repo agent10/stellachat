@@ -1,8 +1,6 @@
 package kiol.apps.stellachat
 
 import android.annotation.SuppressLint
-import android.content.Context
-import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
@@ -10,16 +8,11 @@ import androidx.lifecycle.lifecycleScope
 import kiol.apps.stellachat.databinding.ActivityMainBinding
 import kiol.apps.stellachat.helpers.BasePeerConnectionObserver
 import kiol.apps.stellachat.helpers.BaseSdpObserver
-import kiol.apps.stellachat.sockets.MulticastChannel
-import kiol.apps.stellachat.sockets.TcpChannel
-import kiol.apps.stellachat.sockets.TcpResult
-import kiol.apps.stellachat.sockets.UdpChannel
+import kiol.apps.stellachat.sockets.*
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
-import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.webrtc.*
 import java.net.InetAddress
@@ -77,9 +70,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private lateinit var communicator: Communicator
+
     @SuppressLint("UnsafeExperimentalUsageError")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        communicator = Communicator(applicationContext)
 
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -109,34 +106,62 @@ class MainActivity : AppCompatActivity() {
         binding.connectBtn.setOnClickListener {
             val (ip, port) = binding.ipPort.text.split(":")
 
-            tcpChannel = TcpChannel(InetAddress.getByName(ip), port.toInt(), isServer).apply {
-                stream().flowOn(Dispatchers.IO).onEach {
-                    Log.d("wrtc SdpObserver", "tcp received $it")
-                    if (it is TcpResult.Data) {
-                        val json = JSONObject(it.message)
-                        val type = json.optString("type")
-                        if (type.equals("candidate")) {
-                            val icecand = IceCandidate(json.getString("id"), json.getInt("label"), json.getString("candidate"))
-                            peerConnection?.addIceCandidate(icecand)
-                        } else if (type.equals("answer")) {
-                            val remotesdp =
-                                SessionDescription(SessionDescription.Type.fromCanonicalForm(type), json.getString("sdp"))
-                            peerConnection?.setRemoteDescription(sdbObserver, remotesdp)
-                        } else if (type.equals("offer")) {
-                            val remotesdp =
-                                SessionDescription(SessionDescription.Type.fromCanonicalForm(type), json.getString("sdp"))
-                            peerConnection?.setRemoteDescription(sdbObserver, remotesdp)
-                            peerConnection?.createAnswer(sdbObserver, sdpMediaConstraints)
-                        }
-                    } else if (it is TcpResult.Connected) {
-                        createPeerConnection()
-                    }
-                }.launchIn(lifecycleScope)
-            }
+            createTcpChannel(
+                InetAddress.getByName(ip),
+                port.toInt(),
+                isServer
+            )
         }
 
+        communicator.callListener = { device, accept ->
+            if (!accept) {
+                createTcpChannel(InetAddress.getByName("0.0.0.0"), 8888, true)
+            } else {
+                createTcpChannel(device.inetAddress, 8888, false)
+            }
+            communicator.sendAcceptCall()
+        }
+
+        communicator.devices.onEach {
+            Log.d("Communicator", "list = $it")
+        }.launchIn(lifecycleScope)
     }
 
+    private fun createTcpChannel(inetAddress: InetAddress, port: Int, isServer: Boolean) {
+        tcpChannel = TcpChannel(
+            inetAddress,
+            port,
+            isServer
+        ).apply {
+            stream().flowOn(Dispatchers.IO).onEach {
+                Log.d("wrtc SdpObserver", "tcp received $it")
+                if (it is TcpResult.Data) {
+                    val json = JSONObject(it.message)
+                    val type = json.optString("type")
+                    if (type.equals("candidate")) {
+                        val icecand = IceCandidate(json.getString("id"), json.getInt("label"), json.getString("candidate"))
+                        peerConnection?.addIceCandidate(icecand)
+                    } else if (type.equals("answer")) {
+                        val remotesdp =
+                            SessionDescription(SessionDescription.Type.fromCanonicalForm(type), json.getString("sdp"))
+                        peerConnection?.setRemoteDescription(sdbObserver, remotesdp)
+                    } else if (type.equals("offer")) {
+                        val remotesdp =
+                            SessionDescription(SessionDescription.Type.fromCanonicalForm(type), json.getString("sdp"))
+                        peerConnection?.setRemoteDescription(sdbObserver, remotesdp)
+                        peerConnection?.createAnswer(sdbObserver, sdpMediaConstraints)
+                    }
+                } else if (it is TcpResult.Connected) {
+                    createPeerConnection()
+                }
+            }.launchIn(lifecycleScope)
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        communicator.close()
+    }
 
     private fun createPeerConnection() {
         PeerConnectionFactory.initialize(
