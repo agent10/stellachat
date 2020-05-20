@@ -1,8 +1,12 @@
 package kiol.apps.stellachat
 
 import android.annotation.SuppressLint
+import android.graphics.Color
 import android.os.Bundle
+import android.text.Layout
 import android.util.Log
+import android.view.ViewGroup
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import kiol.apps.stellachat.databinding.ActivityMainBinding
@@ -21,7 +25,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
 
-    private var isServer = true
+    private var isServer = false
     private var tcpChannel: TcpChannel? = null
     private var peerConnection: PeerConnection? = null
 
@@ -72,6 +76,8 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var communicator: Communicator
 
+    private val deviceList = mutableListOf<Communicator.DeviceInfo>()
+
     @SuppressLint("UnsafeExperimentalUsageError")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -93,37 +99,54 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.ipPort.setText("0.0.0.0:8888")
-        binding.socketTypeGroup.setOnCheckedChangeListener { group, checkedId ->
-            if (checkedId == R.id.serverCheckId) {
-                isServer = true
-                binding.ipPort.setText("0.0.0.0:8888")
-            } else {
-                isServer = false
-                binding.ipPort.setText("192.168.0.103:8888")
-            }
-        }
+//        binding.socketTypeGroup.setOnCheckedChangeListener { group, checkedId ->
+//            if (checkedId == R.id.serverCheckId) {
+//                isServer = true
+//                binding.ipPort.setText("0.0.0.0:8888")
+//            } else {
+//                isServer = false
+//                binding.ipPort.setText("192.168.0.103:8888")
+//            }
+//        }
 
         binding.connectBtn.setOnClickListener {
-            val (ip, port) = binding.ipPort.text.split(":")
+            deviceList.firstOrNull()?.let {
+                isServer = true
+                createTcpChannel(InetAddress.getByName("0.0.0.0"), 8888, true)
+                communicator.sendOfferCall(it)
+            }
 
-            createTcpChannel(
-                InetAddress.getByName(ip),
-                port.toInt(),
-                isServer
-            )
+            //            val (ip, port) = binding.ipPort.text.split(":")
+            //
+            //            createTcpChannel(
+            //                InetAddress.getByName(ip),
+            //                port.toInt(),
+            //                isServer
+            //            )
         }
 
         communicator.callListener = { device, accept ->
-            if (!accept) {
-                createTcpChannel(InetAddress.getByName("0.0.0.0"), 8888, true)
-            } else {
-                createTcpChannel(device.inetAddress, 8888, false)
+            if (accept) {
+                if(tcpChannel == null) {
+                    createTcpChannel(device.inetAddress, 8888, false)
+                }
             }
-            communicator.sendAcceptCall()
         }
 
         communicator.devices.onEach {
             Log.d("Communicator", "list = $it")
+            deviceList.clear()
+            deviceList.addAll(it)
+            binding.addressBook.removeAllViewsInLayout()
+            it.forEach {
+                val addr = TextView(this)
+                addr.text = it.inetAddress.hostAddress
+                addr.layoutParams =
+                    ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                binding.addressBook.addView(addr)
+            }
+
+
         }.launchIn(lifecycleScope)
     }
 
@@ -152,7 +175,8 @@ class MainActivity : AppCompatActivity() {
                         peerConnection?.createAnswer(sdbObserver, sdpMediaConstraints)
                     }
                 } else if (it is TcpResult.Connected) {
-                    createPeerConnection()
+                    createPeerConnection(isServer)
+                    communicator.callAccepted()
                 }
             }.launchIn(lifecycleScope)
         }
@@ -163,7 +187,7 @@ class MainActivity : AppCompatActivity() {
         communicator.close()
     }
 
-    private fun createPeerConnection() {
+    private fun createPeerConnection(isServer: Boolean) {
         PeerConnectionFactory.initialize(
             PeerConnectionFactory.InitializationOptions.builder(this)
                 .createInitializationOptions()
